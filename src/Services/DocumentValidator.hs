@@ -1,48 +1,55 @@
--- | Module for validating Markdown documents
+-- | This module provides a service for validating Markdown documents.
 module Services.DocumentValidator where
 
-import Control.Monad (liftM2)
-import Data.Maybe (isJust, fromJust)
-import Text.Parsec (ParseError)
-import Text.Parsec.Error (errorPos)
+import qualified Data.ByteString.Lazy.Char8 as BSL
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import Text.Parsec
+import Text.Parsec.String
 
-import qualified Models.MarkdownDocument as MD
-import qualified Utils.ErrorHandling as EH
-import qualified Services.MarkdownConverter as MC
+import Models.MarkdownDocument (MarkdownDocument(..))
+import Utils.ErrorHandling (AppError(..), throwAppError)
 
--- | Validate a Markdown document
-validateDocument :: MD.MarkdownDocument -> Either EH.AppError MD.MarkdownDocument
-validateDocument doc = do
-  -- Check if the document has a title
-  when (null $ MD.title doc) $ Left EH.MissingTitleError
+-- | Validate a Markdown document.
+validateDocument :: MarkdownDocument -> Either AppError MarkdownDocument
+validateDocument doc = case parse markdownParser "" (mdContent doc) of
+  Left err -> Left $ AppError $ T.pack $ show err
+  Right _ -> Right doc
 
-  -- Check if the document has content
-  when (null $ MD.content doc) $ Left EH.EmptyDocumentError
+-- | Markdown parser.
+markdownParser :: Parser ()
+markdownParser = do
+  many (try headerParser <|> try paragraphParser <|> try linkParser)
+  eof
 
-  -- Try to parse the Markdown content
-  case MC.parseMarkdown (MD.content doc) of
-    Left err -> Left $ EH.ParseError $ show err
-    Right _ -> Right doc
+-- | Header parser.
+headerParser :: Parser ()
+headerParser = do
+  char '#'
+  many (noneOf "\n")
+  newline
+  return ()
 
--- | Validate a list of Markdown documents
-validateDocuments :: [MD.MarkdownDocument] -> Either EH.AppError [MD.MarkdownDocument]
-validateDocuments docs = mapM validateDocument docs
+-- | Paragraph parser.
+paragraphParser :: Parser ()
+paragraphParser = do
+  many (noneOf "\n")
+  newline
+  return ()
 
--- | Check if a document has a valid title
-hasValidTitle :: MD.MarkdownDocument -> Bool
-hasValidTitle doc = not $ null $ MD.title doc
+-- | Link parser.
+linkParser :: Parser ()
+linkParser = do
+  char '['
+  many (noneOf "]")
+  char ']'
+  char '('
+  many (noneOf ")")
+  char ')'
+  return ()
 
--- | Check if a document has valid content
-hasValidContent :: MD.MarkdownDocument -> Bool
-hasValidContent doc = not $ null $ MD.content doc
-
--- | Get the validation errors for a document
-getValidationErrors :: MD.MarkdownDocument -> [EH.AppError]
-getValidationErrors doc
-  | null (MD.title doc) = [EH.MissingTitleError]
-  | null (MD.content doc) = [EH.EmptyDocumentError]
-  | otherwise = []
-
--- | Example usage:
--- validateDocument (MD.MarkdownDocument "Example" "This is an example document.")
--- validateDocuments [MD.MarkdownDocument "Example 1" "This is an example document.", MD.MarkdownDocument "" "This is another example document."]
+-- | Validate a Markdown document and return the validated document.
+validateAndReturnDocument :: MarkdownDocument -> IO MarkdownDocument
+validateAndReturnDocument doc = case validateDocument doc of
+  Left err -> throwAppError err
+  Right validatedDoc -> return validatedDoc
