@@ -1,55 +1,53 @@
--- | This module provides a service for validating Markdown documents.
+-- | Module for validating Markdown and HTML documents.
 module Services.DocumentValidator where
 
-import qualified Data.ByteString.Lazy.Char8 as BSL
+import qualified Data.ByteString.Lazy.Char8 as BL
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import Text.Parsec
 import Text.Parsec.String
 
-import Models.MarkdownDocument (MarkdownDocument(..))
-import Utils.ErrorHandling (AppError(..), throwAppError)
+import Models.MarkdownDocument
+import Models.HtmlDocument
+import Utils.ErrorHandling
 
 -- | Validate a Markdown document.
-validateDocument :: MarkdownDocument -> Either AppError MarkdownDocument
-validateDocument doc = case parse markdownParser "" (mdContent doc) of
-  Left err -> Left $ AppError $ T.pack $ show err
+validateMarkdownDocument :: MarkdownDocument -> Either String MarkdownDocument
+validateMarkdownDocument doc = case parse markdownParser "" (BL.unpack $ markdownContent doc) of
+  Left err -> Left $ "Failed to parse Markdown: " ++ show err
+  Right _ -> Right doc
+
+-- | Validate an HTML document.
+validateHtmlDocument :: HtmlDocument -> Either String HtmlDocument
+validateHtmlDocument doc = case parse htmlParser "" (BL.unpack $ htmlContent doc) of
+  Left err -> Left $ "Failed to parse HTML: " ++ show err
   Right _ -> Right doc
 
 -- | Markdown parser.
-markdownParser :: Parser ()
+markdownParser :: Parsec String () ()
 markdownParser = do
-  many (try headerParser <|> try paragraphParser <|> try linkParser)
-  eof
-
--- | Header parser.
-headerParser :: Parser ()
-headerParser = do
-  char '#'
-  many (noneOf "\n")
+  many $ noneOf "\n"
   newline
-  return ()
+  many $ noneOf "\n"
 
--- | Paragraph parser.
-paragraphParser :: Parser ()
-paragraphParser = do
-  many (noneOf "\n")
-  newline
-  return ()
+-- | HTML parser.
+htmlParser :: Parsec String () ()
+htmlParser = do
+  many $ noneOf "<"
+  try (string "<html>") <|> try (string "<body>") <|> try (string "<head>")
+  many $ noneOf ">"
 
--- | Link parser.
-linkParser :: Parser ()
-linkParser = do
-  char '['
-  many (noneOf "]")
-  char ']'
-  char '('
-  many (noneOf ")")
-  char ')'
-  return ()
+-- | Validate a document based on its type.
+validateDocument :: T.Text -> BL.ByteString -> Either String BL.ByteString
+validateDocument "markdown" content = case validateMarkdownDocument (MarkdownDocument content) of
+  Left err -> Left $ T.pack err
+  Right _ -> Right content
+validateDocument "html" content = case validateHtmlDocument (HtmlDocument content) of
+  Left err -> Left $ T.pack err
+  Right _ -> Right content
+validateDocument _ _ = Left "Unsupported document type"
 
--- | Validate a Markdown document and return the validated document.
-validateAndReturnDocument :: MarkdownDocument -> IO MarkdownDocument
-validateAndReturnDocument doc = case validateDocument doc of
-  Left err -> throwAppError err
-  Right validatedDoc -> return validatedDoc
+-- | Validate a document and return a JSON response.
+validateDocumentResponse :: T.Text -> BL.ByteString -> Either String BL.ByteString
+validateDocumentResponse docType content = case validateDocument docType content of
+  Left err -> Left $ BL.pack $ "{\"error\":\"" ++ T.unpack err ++ "\"}"
+  Right _ -> Right $ BL.pack "{\"message\":\"Document is valid\"}"
