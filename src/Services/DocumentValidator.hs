@@ -1,53 +1,45 @@
--- | Module for validating Markdown and HTML documents.
+-- | Module for validating markdown and html documents
 module Services.DocumentValidator where
 
-import qualified Data.ByteString.Lazy.Char8 as BL
-import qualified Data.Text as T
-import Text.Parsec
-import Text.Parsec.String
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Char8 as BS
+import Text.Regex.TDFA ((=~))
+import Text.Regex.TDFA.Text ()
+import Control.Monad (liftM2)
+import Control.Monad.Trans.Except (throwE)
+import Data.Maybe (fromJust)
+import Models.MarkdownDocument (MarkdownDocument(..))
+import Models.HtmlDocument (HtmlDocument(..))
+import Utils.ErrorHandling (ValidationError(..), throwValidationError)
 
-import Models.MarkdownDocument
-import Models.HtmlDocument
-import Utils.ErrorHandling
+-- | Validate a markdown document
+validateMarkdownDocument :: MarkdownDocument -> Either ValidationError MarkdownDocument
+validateMarkdownDocument doc
+  | not (isValidTitle (mdTitle doc)) = Left $ ValidationError "Invalid title"
+  | not (isValidContent (mdContent doc)) = Left $ ValidationError "Invalid content"
+  | otherwise = Right doc
+  where
+    isValidTitle title = title =~ "^[a-zA-Z0-9\\s]+$" :: Bool
+    isValidContent content = content =~ "^[a-zA-Z0-9\\s\\n]+$" :: Bool
 
--- | Validate a Markdown document.
-validateMarkdownDocument :: MarkdownDocument -> Either String MarkdownDocument
-validateMarkdownDocument doc = case parse markdownParser "" (BL.unpack $ markdownContent doc) of
-  Left err -> Left $ "Failed to parse Markdown: " ++ show err
-  Right _ -> Right doc
+-- | Validate an html document
+validateHtmlDocument :: HtmlDocument -> Either ValidationError HtmlDocument
+validateHtmlDocument doc
+  | not (isValidTitle (htmlTitle doc)) = Left $ ValidationError "Invalid title"
+  | not (isValidContent (htmlContent doc)) = Left $ ValidationError "Invalid content"
+  | otherwise = Right doc
+  where
+    isValidTitle title = title =~ "^[a-zA-Z0-9\\s]+$" :: Bool
+    isValidContent content = content =~ "^[a-zA-Z0-9\\s\\n]+$" :: Bool
 
--- | Validate an HTML document.
-validateHtmlDocument :: HtmlDocument -> Either String HtmlDocument
-validateHtmlDocument doc = case parse htmlParser "" (BL.unpack $ htmlContent doc) of
-  Left err -> Left $ "Failed to parse HTML: " ++ show err
-  Right _ -> Right doc
+-- | Validate a markdown document and return a validated markdown document
+validateMarkdown :: MarkdownDocument -> IO MarkdownDocument
+validateMarkdown doc = case validateMarkdownDocument doc of
+  Left err -> throwValidationError err
+  Right validatedDoc -> return validatedDoc
 
--- | Markdown parser.
-markdownParser :: Parsec String () ()
-markdownParser = do
-  many $ noneOf "\n"
-  newline
-  many $ noneOf "\n"
-
--- | HTML parser.
-htmlParser :: Parsec String () ()
-htmlParser = do
-  many $ noneOf "<"
-  try (string "<html>") <|> try (string "<body>") <|> try (string "<head>")
-  many $ noneOf ">"
-
--- | Validate a document based on its type.
-validateDocument :: T.Text -> BL.ByteString -> Either String BL.ByteString
-validateDocument "markdown" content = case validateMarkdownDocument (MarkdownDocument content) of
-  Left err -> Left $ T.pack err
-  Right _ -> Right content
-validateDocument "html" content = case validateHtmlDocument (HtmlDocument content) of
-  Left err -> Left $ T.pack err
-  Right _ -> Right content
-validateDocument _ _ = Left "Unsupported document type"
-
--- | Validate a document and return a JSON response.
-validateDocumentResponse :: T.Text -> BL.ByteString -> Either String BL.ByteString
-validateDocumentResponse docType content = case validateDocument docType content of
-  Left err -> Left $ BL.pack $ "{\"error\":\"" ++ T.unpack err ++ "\"}"
-  Right _ -> Right $ BL.pack "{\"message\":\"Document is valid\"}"
+-- | Validate an html document and return a validated html document
+validateHtml :: HtmlDocument -> IO HtmlDocument
+validateHtml doc = case validateHtmlDocument doc of
+  Left err -> throwValidationError err
+  Right validatedDoc -> return validatedDoc
