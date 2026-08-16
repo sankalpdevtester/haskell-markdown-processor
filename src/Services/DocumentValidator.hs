@@ -1,45 +1,62 @@
--- | Module for validating markdown and html documents
+-- | Document validation service for Markdown and HTML documents
 module Services.DocumentValidator where
 
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Char8 as BS
-import Text.Regex.TDFA ((=~))
-import Text.Regex.TDFA.Text ()
-import Control.Monad (liftM2)
-import Control.Monad.Trans.Except (throwE)
-import Data.Maybe (fromJust)
+import Data.Maybe (fromMaybe)
+import Text.Regex (matchRegex, mkRegex)
 import Models.MarkdownDocument (MarkdownDocument(..))
 import Models.HtmlDocument (HtmlDocument(..))
-import Utils.ErrorHandling (ValidationError(..), throwValidationError)
+import Utils.ErrorHandling (AppError(..), throwAppError)
 
--- | Validate a markdown document
-validateMarkdownDocument :: MarkdownDocument -> Either ValidationError MarkdownDocument
+-- | Validate a Markdown document
+validateMarkdownDocument :: MarkdownDocument -> Either AppError MarkdownDocument
 validateMarkdownDocument doc
-  | not (isValidTitle (mdTitle doc)) = Left $ ValidationError "Invalid title"
-  | not (isValidContent (mdContent doc)) = Left $ ValidationError "Invalid content"
+  | null (mdContent doc) = Left $ AppError "Markdown content is empty"
+  | not (isValidMarkdown doc) = Left $ AppError "Invalid Markdown syntax"
   | otherwise = Right doc
-  where
-    isValidTitle title = title =~ "^[a-zA-Z0-9\\s]+$" :: Bool
-    isValidContent content = content =~ "^[a-zA-Z0-9\\s\\n]+$" :: Bool
 
--- | Validate an html document
-validateHtmlDocument :: HtmlDocument -> Either ValidationError HtmlDocument
+-- | Validate an HTML document
+validateHtmlDocument :: HtmlDocument -> Either AppError HtmlDocument
 validateHtmlDocument doc
-  | not (isValidTitle (htmlTitle doc)) = Left $ ValidationError "Invalid title"
-  | not (isValidContent (htmlContent doc)) = Left $ ValidationError "Invalid content"
+  | null (htmlContent doc) = Left $ AppError "HTML content is empty"
+  | not (isValidHtml doc) = Left $ AppError "Invalid HTML syntax"
   | otherwise = Right doc
+
+-- | Check if a Markdown document has valid syntax
+isValidMarkdown :: MarkdownDocument -> Bool
+isValidMarkdown doc = isJust $ matchRegex (mkRegex "^#.*$") (BSL.toStrict $ mdContent doc)
+
+-- | Check if an HTML document has valid syntax
+isValidHtml :: HtmlDocument -> Bool
+isValidHtml doc = isJust $ matchRegex (mkRegex "^<html>.*</html>$") (BSL.toStrict $ htmlContent doc)
+
+-- | Validate a document based on its type
+validateDocument :: String -> BSL.ByteString -> Either AppError (Either MarkdownDocument HtmlDocument)
+validateDocument "markdown" content = do
+  doc <- parseMarkdownDocument content
+  pure $ Left doc
   where
-    isValidTitle title = title =~ "^[a-zA-Z0-9\\s]+$" :: Bool
-    isValidContent content = content =~ "^[a-zA-Z0-9\\s\\n]+$" :: Bool
+    parseMarkdownDocument :: BSL.ByteString -> Either AppError MarkdownDocument
+    parseMarkdownDocument content = Right $ MarkdownDocument content
 
--- | Validate a markdown document and return a validated markdown document
-validateMarkdown :: MarkdownDocument -> IO MarkdownDocument
-validateMarkdown doc = case validateMarkdownDocument doc of
-  Left err -> throwValidationError err
-  Right validatedDoc -> return validatedDoc
+validateDocument "html" content = do
+  doc <- parseHtmlDocument content
+  pure $ Right doc
+  where
+    parseHtmlDocument :: BSL.ByteString -> Either AppError HtmlDocument
+    parseHtmlDocument content = Right $ HtmlDocument content
 
--- | Validate an html document and return a validated html document
-validateHtml :: HtmlDocument -> IO HtmlDocument
-validateHtml doc = case validateHtmlDocument doc of
-  Left err -> throwValidationError err
-  Right validatedDoc -> return validatedDoc
+validateDocument _ _ = Left $ AppError "Unsupported document type"
+
+-- | Validate a document and return the validated document
+validateAndReturnDocument :: String -> BSL.ByteString -> Either AppError (Either MarkdownDocument HtmlDocument)
+validateAndReturnDocument docType content = do
+  doc <- validateDocument docType content
+  case doc of
+    Left markdownDoc -> do
+      validatedDoc <- validateMarkdownDocument markdownDoc
+      pure $ Left validatedDoc
+    Right htmlDoc -> do
+      validatedDoc <- validateHtmlDocument htmlDoc
+      pure $ Right validatedDoc
